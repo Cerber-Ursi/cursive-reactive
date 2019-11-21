@@ -1,49 +1,47 @@
-use cursive::{Cursive, view::View};
+use cursive::view::View;
+use cursive::Cursive;
 
-type Renderer<Props, Out> = Box<dyn Fn(Props) -> Out>;
-
-pub enum Element<Props> {
-    Native(Renderer<Props, Box<dyn View>>),
-    Reactive(Renderer<Props, Box<dyn Component<Props = ()>>>),
-    Fragment(Renderer<Props, Vec<Element<()>>>),
-    None,
+pub trait Element {
+    type Native: View;
+    fn as_native(self) -> Self::Native;
 }
 
-pub trait Component {
-    type Props;
-    fn render(&self) -> Element<Self::Props>;
+pub struct NativeElement<V: View> {
+    view: V,
 }
 
-pub fn render<Props, C: Component<Props = Props> + ?Sized>(comp: &C, props: Props, context: &mut Cursive) {
-    mount(comp.render(), props, context);
-}
-
-fn mount<Props>(elem: Element<Props>, props: Props, context: &mut Cursive) {
-    use Element::*;
-    match elem {
-        Native(renderer) => context.add_layer(renderer(props)),
-        Reactive(renderer) => render(&*renderer(props), (), context),
-        Fragment(renderer) => renderer(props).into_iter().for_each(|el| mount(el, (), context)),
-        None => {},
-    };
-}
-
-#[test]
-fn test() {
-    use cursive::views::TextView;
-    struct Test;
-    impl Component for Test {
-        type Props = ();
-        fn render(&self) -> Element<()> {
-            Element::Native(Box::new(|_| Box::new(TextView::new("Test"))))
-        }
+impl<V: View> Element for NativeElement<V> {
+    type Native = V;
+    fn as_native(self) -> Self::Native {
+        self.view
     }
-    let backend = cursive::backend::puppet::Backend::init(Some(cursive::vec::Vec2{x: 10, y: 10}));
-    let output = backend.stream();
-    let mut ctx = Cursive::new(move || backend);
-    render(&Test, (), &mut ctx);
-    ctx.refresh();
-    ctx.step();
-    output.recv().unwrap();
-    output.recv().unwrap().print_stdout();
+}
+
+pub struct ComponentElement<P: PartialEq, C: Component<P>> {
+    inner: C,
+    props: P,
+}
+
+impl<P: PartialEq, C: Component<P>> Element for ComponentElement<P, C> {
+    type Native = <<C as Component<P>>::Output as Element>::Native;
+    fn as_native(self) -> Self::Native {
+        self.inner.render(self.props).as_native()
+    }
+}
+
+pub trait Component<P: PartialEq> {
+    type Output: Element;
+    fn render(&self, props: P) -> Self::Output;
+}
+
+impl<E: Element, P: PartialEq, F: Fn(P) -> E> Component<P> for F {
+    type Output = E;
+    fn render(&self, props: P) -> Self::Output {
+        self(props)
+    }
+}
+
+pub fn run(ctx: &mut Cursive, root: impl Element) {
+    ctx.add_layer(root.as_native());
+    ctx.run();
 }
